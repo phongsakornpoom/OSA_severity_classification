@@ -56,7 +56,7 @@ for loop in range(1,201):
 
     train_dataset = DataLoader(train_data, batch_size=32, sampler=sampler)
     test_dataset = DataLoader(test_data, batch_size=32, shuffle=False)
-    val_dataset = DataLoader(val_data, batch_size=32, shuffle=False)
+    val_dataset = DataLoader(val_data, batch_size=32, shuffle=True)
 
     vgg = vgg19(weights=vgg_weight).to(device)
 
