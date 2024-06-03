@@ -137,7 +137,7 @@ def combined_val_loop(model, dataset, loss_fn, acc1, acc2, recall, precision, f1
     return val_loss.item(), val_acc.item(), val_acc2.item(), val_recall.item(),val_precision.item(), val_f1.item(), val_spec.item()
 
 
-def combined_fit_loop(epochs, train_data, val_data, model,optmizer, loss_fn, acc1, acc2, recall, precision, f1score, spec,device,patience):
+def combined_fit_loop(loop,epochs, train_data, val_data, model,optmizer, loss_fn, acc1, acc2, recall, precision, f1score, spec,device,patience):
     result = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': [], 'train_acc2': [], 'val_acc2': [], 'train_recall': [], 'val_recall': [], 'train_precision': [], 'val_precision': [],'train_f1':[], 'val_f1': [], 'train_spec':[], 'val_spec': []}
     best_valacc = 0
     best_valacc2 = 0
@@ -162,23 +162,20 @@ def combined_fit_loop(epochs, train_data, val_data, model,optmizer, loss_fn, acc
         result['train_spec'].append(train_spec)
         result['val_spec'].append(val_spec)
         #save best model
-        if best_valacc<val_acc:
-            best_valacc=val_acc
-            torch.save(model.state_dict(),'combinedbestacc.pt')
         if best_valacc2<val_acc2:
             best_valacc2=val_acc2
-            torch.save(model.state_dict(), 'combinedbestacc2.pt')
+            torch.save(model.state_dict(), str(loop)+'combinedbestacc.pt')
         if best_valf1<val_f1:
             best_valf1 = val_f1
-            torch.save(model.state_dict(), 'combinedbestf1.pt')
+            torch.save(model.state_dict(), str(loop)+'combinedbestf1.pt')
         if epoch==0:
             pred_loss = val_loss
         else:
             if val_loss<pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
+                print(f'loop no {loop} epoch {fg.yellow + str(epoch + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
                 cur_patience = patience
             elif val_loss > pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
+                print(f'loop no {loop} epoch {fg.yellow + str(epoch + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
                 cur_patience-=1
                 if cur_patience ==0:
                     print('Early stop activated')
@@ -241,7 +238,7 @@ def vgg_val_step(model, val_set, loss_fn, acc_fn,acc_fn2, recall, precision, f1s
     
 
 
-def vgg_fit_loop(model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,acc_fn2,recall, precision, f1score, device, patience):
+def vgg_fit_loop(loop,model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,acc_fn2,recall, precision, f1score, device, patience):
     result = {'trainacc':[], 'trainloss': [],'train_acc2':[], 'train_precision':[],'train_recall':[], 'train_f1score':[],'valoss': [], 'valacc':[], 'valacc2': [], 'valrecall': [], 'valprecision': [], 'valf1score': []}
     cur_patience = patience
     best_valacc = 0
@@ -263,23 +260,20 @@ def vgg_fit_loop(model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,ac
         result['valprecision'].append(val_precision)
         result['valf1score'].append(val_f1)
         result['train_f1score'].append(train_f1)
-        if val_acc>best_valacc:
-            best_valacc=val_acc
-            torch.save(model.state_dict(), 'vggbestacc.pt')
         if val_f1>best_valf1:
             best_valf1=val_f1
-            torch.save(model.state_dict(), 'vggbestf1.pt')
+            torch.save(model.state_dict(), str(loop)+'vggbestf1.pt')
         if val_acc2>best_valaccmicro:
             best_valaccmicro=val_acc2
-            torch.save(model.state_dict(), 'vggbestaccmicro.pt')
+            torch.save(model.state_dict(), str(loop)+'vggbestaccmicro.pt')
         if i==0:
                 pred_loss = val_loss
         else:
             if val_loss<pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
+                print(f'loop no {loop} epoch {fg.yellow + str(i + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
                 cur_patience = patience
             elif val_loss > pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
+                print(f'loop no {loop} epoch {fg.yellow + str(i + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
                 cur_patience-=1
                 if cur_patience ==0:
                     print('Early stop activated')
@@ -287,6 +281,7 @@ def vgg_fit_loop(model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,ac
             elif val_loss == pred_loss:
                 print('the loss didnt change from last epoch')
         pred_loss = val_loss
+    return result
 
 def train_step(model, train_set , optimizer, loss_fn, acc_fn, acc_fn2, recall, precision, f1score,device):
     train_loss, train_acc,train_acc2,train_recall, train_precision, train_f1 = 0,0,0,0,0,0
@@ -339,7 +334,7 @@ def val_step(model, val_set, loss_fn, acc_fn,acc_fn2, recall, precision, f1score
     
 
 
-def fit_loop(model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,acc_fn2,recall, precision, f1score, device, patience):
+def fit_loop(loop,model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,acc_fn2,recall, precision, f1score, device, patience):
     result = {'trainacc':[], 'trainloss': [],'train_acc2':[], 'train_precision':[],'train_recall':[], 'train_f1score':[],'valoss': [], 'valacc':[], 'valacc2': [], 'valrecall': [], 'valprecision': [], 'valf1score': []}
     cur_patience = patience
     best_acc = 0
@@ -361,23 +356,20 @@ def fit_loop(model, epoch, train_set, val_set, optimizer, loss_fn, acc_fn,acc_fn
         result['valprecision'].append(val_precision)
         result['valf1score'].append(val_f1)
         result['train_f1score'].append(train_f1)
-        if val_acc>best_acc:
-            best_acc = val_acc
-            torch.save(model.state_dict(), 'bestacccnn.pt')
         if val_acc2>best_accmicro:
             best_accmicro = val_acc2
-            torch.save(model.state_dict(), 'bestaccmicrocnn.pt')
+            torch.save(model.state_dict(), str(loop)+'bestaccmicrocnn.pt')
         if val_f1>best_f1:
             best_f1 = val_f1
-            torch.save(model.state_dict(), 'bestf1cnn.pt')
+            torch.save(model.state_dict(), str(loop)+'bestf1cnn.pt')
         if i==0:
             pred_loss = val_loss
         else:
             if val_loss<pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
+                print(f'loop {loop} epoch {fg.yellow + str(i + 1) + fg.rs} : val loss has improved from {str(pred_loss)} to {bg.li_green+ str(val_loss)+ bg.rs}') 
                 cur_patience = patience
             elif val_loss > pred_loss:
-                print(f'epoch {fg.yellow + str(i + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
+                print(f'loop {loop} epoch {fg.yellow + str(i + 1) + fg.rs} :val loss has worsened from {str(pred_loss)} to {bg.red+ str(val_loss)+ bg.rs}')
                 cur_patience-=1
                 if cur_patience ==0:
                     print('Early stop activated')

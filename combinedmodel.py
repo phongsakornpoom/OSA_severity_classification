@@ -16,7 +16,7 @@ from sty import fg,rs,bg
 from sklearn.model_selection import train_test_split
 from torchmetrics.classification import BinarySpecificity, BinaryPrecision, BinaryRecall, BinaryAccuracy, BinaryF1Score
 import torchmetrics
-from sklearn.metrics import roc_curve, auc, brier_score_loss
+from sklearn.metrics import roc_curve, auc, brier_score_loss,matthews_corrcoef, confusion_matrix,precision_recall_curve
 import sys
 sys.path.append('../')
 from dataset_class import *
@@ -30,8 +30,15 @@ vgg_transformer = torchvision.transforms.Compose([
 ])
 images = list(Path('../images/').glob('*.png'))
 spec_metric = []
-cutoff_metric = []
+recall_metric = []
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+torch.cuda.manual_seed(424242)
+torch.manual_seed(424242)
+np.random.seed(424242)
+random.seed(424242)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # For loop here
 for loop in range(1,201):
@@ -70,12 +77,12 @@ for loop in range(1,201):
         nn.Linear(in_features=4096, out_features=1, bias=True)# change the last layer to our output outcome
     ).to(device)
 
-    pt = '../bestaccmicro.pt'
-    dic = torch.load(pt, map_location=torch.device(device))
-    vgg.load_state_dict(dic, strict=False)
+    # pt = '../bestaccmicro.pt'
+    # dic = torch.load(pt, map_location=torch.device(device))
+    # vgg.load_state_dict(dic, strict=False)
     vgg.classifier[-1] = nn.Linear(in_features=4096, out_features=1000, bias=True)
 
-    for params in vgg.parameters():
+    for params in vgg.parameters():#if not freezing comment out this one
         params.requires_grad = False
 
 
@@ -88,12 +95,13 @@ for loop in range(1,201):
     precision = BinaryPrecision().to(device)
     f1score = BinaryF1Score().to(device)
     spec = BinarySpecificity().to(device)
-
-    result =combined_fit_loop(100, train_dataset, val_dataset,model,optimizer,loss, acc1,acc2,recall, precision, f1score, spec, device, 20)
-    torch.save(model.state_dict(), 'combinemodel.pt')
+    result =combined_fit_loop(loop,100, train_dataset, val_dataset,model,optimizer,loss, acc1,acc2,recall, precision, f1score, spec, device, 20)
+    # torch.save(model.state_dict(), 'combinemodel.pt')
+    # df = pd.DataFrame(result)
+    # df.to_csv('combined_train_loss.csv')
 
     y_proba_list = []
-    for pt in ['combinedbestacc.pt','combinedbestacc2.pt', 'combinedbestf1.pt', 'combinemodel.pt']:
+    for pt in [str(loop)+'combinedbestacc.pt', str(loop)+'combinedbestf1.pt']:
         y_probas = []
         model.load_state_dict(torch.load(pt, map_location=torch.device(device)))# change here
         model.eval()
@@ -106,46 +114,76 @@ for loop in range(1,201):
             y_proba_list.append(torch.cat(y_probas))
         
     y =  torch.tensor(test_data.targets()).unsqueeze(dim=1)
-    y_preds = []
+    y_preds_spec = []
     for y_proba in y_proba_list:
         fpr,tpr, thres = roc_curve(y.to('cpu'), y_proba.to('cpu'))
         thres = thres[[i for i,x in enumerate(fpr) if x>=0.5][0]]
-        y_preds.append([1 if i>thres else 0 for i in y_proba]) 
+        y_preds_spec.append([1 if i>thres else 0 for i in y_proba]) 
+
+    y_preds_recall = []
+    for y_proba in y_proba_list:
+        fpr,tpr, thres = roc_curve(y.to('cpu'), y_proba.to('cpu'))
+        thres = thres[[i for i,x in enumerate(tpr) if x>=0.8][0]]
+        y_preds_recall.append([1 if i>thres else 0 for i in y_proba]) 
 
 
-    name=['bestacc','bestacc2', 'bestf1', 'combinemodel']
+    name=['bestacc', 'bestf1']
 
     y = y.squeeze().to(device)
-    for i,(y_pred, y_proba) in enumerate(zip(y_preds,y_proba_list)):
+    for i,(y_pred, y_proba) in enumerate(zip(y_preds_spec,y_proba_list)):
         y_pred = torch.tensor(y_pred).to(device)
         y_proba = y_proba.to(device)
-        accmacro = acc1(y_pred, y).to(device)
+        # accmacro = acc1(y_pred, y).to(device)
         accmicro = acc2(y_pred, y).to(device)
         recallscore = recall(y_pred,y).to(device)
         precisionscore = precision(y_pred, y).to(device)
+        matthewscore = matthews_corrcoef(y.to('cpu'), y_pred.to('cpu'))
         f1scoreresult  = f1score(y_pred, y).to(device)
         specscore = spec(y_pred, y).to(device)
         fpr, tpr, thes = roc_curve(y.to('cpu'), y_proba.to('cpu'))
+        np.save('roc'+str(loop)+'.npy',np.concatenate([fpr,tpr]))
+        confusion = confusion_matrix(y.to('cpu'), y_pred.to('cpu'))
+        np.save(name[i]+'_confusionspec_'+str(loop),confusion)
+        precision_curve,recall_curve, threshold = precision_recall_curve(y.to('cpu'), y_proba.to('cpu'))
+        np.save('prcurve'+str(loop)+'.npy',np.concatenate([precision_curve,recall_curve]))
         auc_score = auc(fpr,tpr)
         brier_score = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
-        spec_metric.append([name[i],loop,accmacro.item(), accmicro.item(), recallscore.item(), precisionscore.item(), f1scoreresult.item(), specscore.item(),auc_score.item(), brier_score.item()])
-
-    for i,y_proba in enumerate(y_proba_list):
-        y_proba = y_proba.to(device)
-        y_pred = torch.round(y_proba).squeeze()
-        accmacro = acc1(y_pred, y).to(device)
-        accmicro = acc2(y_pred, y).to(device)
-        recallscore = recall(y_pred,y).to(device)
-        precisionscore = precision(y_pred, y).to(device)
-        f1scoreresult  = f1score(y_pred, y).to(device)
-        specscore = spec(y_pred, y).to(device)
-        fpr, tpr, thes = roc_curve(y.to('cpu'), y_proba.to('cpu'))
-        auc_score = auc(fpr,tpr)
-        brier_score = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
-        cutoff_metric.append([name[i],loop,accmacro.item(), accmicro.item(), recallscore.item(), precisionscore.item(), f1scoreresult.item(), specscore.item(),auc_score.item(), brier_score.item()])
+        spec_metric.append([name[i],loop, accmicro.item(), recallscore.item(), precisionscore.item(), f1scoreresult.item(), matthewscore.item(),specscore.item(),auc_score.item(), brier_score.item()])
 
 
-result_spec = pd.DataFrame(spec_metric, columns=['name','loop','acc macro','acc micro', 'recall', 'precision', 'f1score','spec', 'auc','brier'])
-result_cutoff = pd.DataFrame(spec_metric, columns=['name','loop','acc macro','acc micro', 'recall', 'precision', 'f1score','spec', 'auc','brier'])
-result_cutoff.to_excel('result_cutoff.xlsx')
+    for i,(y_pred, y_proba) in enumerate(zip(y_preds_recall,y_proba_list)):
+            y_pred = torch.tensor(y_pred).to(device)
+            y_proba = y_proba.to(device)
+            # accmacro = acc1(y_pred, y).to(device)
+            accmicro = acc2(y_pred, y).to(device)
+            recallscore = recall(y_pred,y).to(device)
+            precisionscore = precision(y_pred, y).to(device)
+            f1scoreresult  = f1score(y_pred, y).to(device)
+            specscore = spec(y_pred, y).to(device)
+            matthewscore = matthews_corrcoef(y.to('cpu'), y_pred.to('cpu'))
+            confusion = confusion_matrix(y.to('cpu'), y_pred.to('cpu'))
+            np.save(name[i]+'_confusionrecall_'+str(loop),confusion)
+            fpr, tpr, thes = roc_curve(y.to('cpu'), y_pred.to('cpu'))
+            auc_score = auc(fpr,tpr)
+            brier_score = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
+            recall_metric.append([name[i],loop, accmicro.item(), recallscore.item(), precisionscore.item(), f1scoreresult.item(),matthewscore.item(), specscore.item(),auc_score.item(), brier_score.item()])
+
+    # for i,y_proba in enumerate(y_proba_list):
+    #     y_proba = y_proba.to(device)
+    #     y_pred = torch.round(y_proba).squeeze()
+    #     accmacro = acc1(y_pred, y).to(device)
+    #     accmicro = acc2(y_pred, y).to(device)
+    #     recallscore = recall(y_pred,y).to(device)
+    #     precisionscore = precision(y_pred, y).to(device)
+    #     f1scoreresult  = f1score(y_pred, y).to(device)
+    #     specscore = spec(y_pred, y).to(device)
+    #     fpr, tpr, thes = roc_curve(y.to('cpu'), y_proba.to('cpu'))
+    #     auc_score = auc(fpr,tpr)
+    #     brier_score = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
+    #     cutoff_metric.append([name[i],loop,accmacro.item(), accmicro.item(), recallscore.item(), precisionscore.item(), f1scoreresult.item(), specscore.item(),auc_score.item(), brier_score.item()])
+
+
+result_spec = pd.DataFrame(spec_metric, columns=['name','loop','acc micro', 'recall', 'precision', 'f1score','MCC','spec', 'auc','brier'])
+result_recall = pd.DataFrame(recall_metric, columns=['name','loop','acc micro', 'recall', 'precision', 'f1score','MCC','spec', 'auc','brier'])
+result_recall.to_excel('result_recall.xlsx')
 result_spec.to_excel('result_spec.xlsx')

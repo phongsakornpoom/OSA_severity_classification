@@ -20,7 +20,7 @@ from torchmetrics.classification import BinarySpecificity, BinaryPrecision, Bina
 from torchvision.models import vgg19
 from PIL import Image
 from sklearn.metrics import confusion_matrix
-from sklearn.metrics import roc_curve, auc, brier_score_loss
+from sklearn.metrics import roc_curve, auc, brier_score_loss, matthews_corrcoef,confusion_matrix,precision_recall_curve
 from sklearn.model_selection import train_test_split
 import sys
 sys.path.append('../')
@@ -38,9 +38,14 @@ vgg_transformer = torchvision.transforms.Compose([
 ])
 vgg_transformer
 device = 'cuda' if torch.cuda.is_available() else 'cpu' 
-
+torch.cuda.manual_seed(424242)
+torch.manual_seed(424242)
+np.random.seed(424242)
+random.seed(424242)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 spec_metric = []
-cut_metric = []
+recall_metric = []
 images = list(Path('../images/').glob('*.png'))
 #loop
 for epoch in range(1,201):
@@ -85,12 +90,13 @@ for epoch in range(1,201):
     recall = BinaryRecall().to(device)
     f1score = BinaryF1Score().to(device)
     optimizer = torch.optim.Adam(vgg.parameters(), lr = 5e-5)
-    result = vgg_fit_loop(Vggmodel, 100, train_dataset, val_dataset, optimizer, loss_fn, acc_fn,acc_fn2,recall,precision, f1score, device, 20)
+    result = vgg_fit_loop(epoch,Vggmodel, 100, train_dataset, val_dataset, optimizer, loss_fn, acc_fn,acc_fn2,recall,precision, f1score, device, 20)
 
-    torch.save(Vggmodel.state_dict(), 'vgg.pt')
-
+    # torch.save(Vggmodel.state_dict(), 'vgg.pt')
+    # df = pd.DataFrame(result)
+    # df.to_csv('VGG_train_loss.csv')
     y_problist = []
-    for pt in ['vgg.pt','vggbestacc.pt','vggbestf1.pt', 'vggbestaccmicro.pt']:
+    for pt in [str(epoch)+'vggbestf1.pt', str(epoch)+'vggbestaccmicro.pt']:
         Vggmodel.load_state_dict(torch.load(pt,map_location=torch.device(device)))
         Vggmodel.eval()
         y_probas = []
@@ -103,46 +109,74 @@ for epoch in range(1,201):
             y_problist.append(torch.cat(y_probas))
 
     y = torch.tensor(test_data.targets()).unsqueeze(1)
-    name = ['Vgg19 model full epoch', 'vgg19 best epoch', ' vgg19 best f1', 'best micro']
-    y_predlist = []
+    name = ['vgg19 best f1', 'vgg best acc']
+    y_predspec = []
     for proba in y_problist:
         fpr, tpr, threshold = roc_curve(y, proba.squeeze().to('cpu') )
         thres = threshold[[i for i,n in enumerate(fpr) if n>=0.5][0]]
-        y_predlist.append(torch.tensor([1 if i>thres else 0  for i in proba]))
+        y_predspec.append(torch.tensor([1 if i>thres else 0  for i in proba]))
+    y_predrecall = []
+    for proba in y_problist:
+        fpr, tpr, threshold = roc_curve(y, proba.squeeze().to('cpu') )
+        thres = threshold[[i for i,n in enumerate(tpr) if n>=0.8][0]]
+        y_predrecall.append(torch.tensor([1 if i>thres else 0  for i in proba]))
 
     spec_fn = BinarySpecificity()
     acc_fntest = Accuracy('multiclass', num_classes=2, average='macro')
     acc_fntest2 = Accuracy('multiclass', num_classes=2, average='micro')
-    for i,(y_probas,y_pred) in enumerate(zip(y_problist,y_predlist)):
+    for i,(y_probas,y_pred) in enumerate(zip(y_problist,y_predspec)):
         y_proba,y = y_probas.squeeze(),y.squeeze() 
         test_recall = recall(y_pred, y).to('cpu')
         test_precision = precision(y_pred, y).to('cpu')
         test_f1score = f1score(y_pred, y).to('cpu')
-        test_acc = acc_fntest(y_pred, y).to('cpu')
+        # test_acc = acc_fntest(y_pred, y).to('cpu')
         test_acc2 = acc_fntest2(y_pred, y).to('cpu')
         test_spec = spec_fn(y_pred, y).to('cpu')
-        brier = brier_score_loss(y, y_pred)
-        fpr, tpr, threshold = roc_curve(y, y_proba.to('cpu'))
+        brier = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
+        matthewscore = matthews_corrcoef(y.to('cpu'), y_pred.to('cpu'))
+        fpr, tpr, threshold = roc_curve(y.to('cpu'), y_proba.to('cpu'))
+        np.save('roc'+str(epoch)+'.npy',np.concatenate([fpr,tpr]))
+        confusion = confusion_matrix(y, y_pred)
+        np.save(name[i]+'_confusionspec_'+str(epoch),confusion)
+        precision_curve,recall_curve, threshold = precision_recall_curve(y.to('cpu'), y_proba.to('cpu'))
+        np.save('prcurve'+str(epoch)+'.npy',np.concatenate([precision_curve,recall_curve]))
         auc_score = auc(fpr, tpr)
-        spec_metric.append([name[i],epoch,test_acc.item(),test_acc2.item(), test_recall.item(), test_precision.item(), test_f1score.item(), test_spec.item(), auc_score, brier])
+        spec_metric.append([name[i],epoch,test_acc2.item(), test_recall.item(), test_precision.item(), test_f1score.item(), matthewscore.item(),test_spec.item(), auc_score, brier])
 
-    for i,y_probas in enumerate(y_problist):
-        y_proba,y = y_probas.squeeze(),y.squeeze()
-        y_pred = torch.round(y_proba).to('cpu') 
+    for i,(y_probas,y_pred) in enumerate(zip(y_problist,y_predrecall)):
+        y_proba,y = y_probas.squeeze(),y.squeeze() 
         test_recall = recall(y_pred, y).to('cpu')
         test_precision = precision(y_pred, y).to('cpu')
         test_f1score = f1score(y_pred, y).to('cpu')
-        test_acc = acc_fntest(y_pred, y).to('cpu')
+        # test_acc = acc_fntest(y_pred, y).to('cpu')
         test_acc2 = acc_fntest2(y_pred, y).to('cpu')
+        matthewscore = matthews_corrcoef(y.to('cpu'), y_pred.to('cpu'))
         test_spec = spec_fn(y_pred, y).to('cpu')
-        brier = brier_score_loss(y, y_pred)
+        brier = brier_score_loss(y.to('cpu'), y_proba.to('cpu'))
         fpr, tpr, threshold = roc_curve(y, y_proba.to('cpu'))
+        confusion = confusion_matrix(y, y_pred)
+        np.save(name[i]+'_confusionrecall_'+str(epoch),confusion)
         auc_score = auc(fpr, tpr)
-        cut_metric.append([name[i],epoch,test_acc.item(),test_acc2.item(), test_recall.item(), test_precision.item(), test_f1score.item(), test_spec.item(), auc_score, brier])
+        recall_metric.append([name[i],epoch,test_acc2.item(), test_recall.item(), test_precision.item(), test_f1score.item(),matthewscore.item() ,test_spec.item(), auc_score, brier])
+    
+    # for i,y_probas in enumerate(y_problist):
+    #     y_proba,y = y_probas.squeeze(),y.squeeze()
+    #     y_pred = torch.round(y_proba).to('cpu') 
+    #     test_recall = recall(y_pred, y).to('cpu')
+    #     test_precision = precision(y_pred, y).to('cpu')
+    #     test_f1score = f1score(y_pred, y).to('cpu')
+    #     test_acc = acc_fntest(y_pred, y).to('cpu')
+    #     test_acc2 = acc_fntest2(y_pred, y).to('cpu')
+    #     test_spec = spec_fn(y_pred, y).to('cpu')
+    #     brier = brier_score_loss(y, y_pred)
+    #     fpr, tpr, threshold = roc_curve(y, y_proba.to('cpu'))
+    #     auc_score = auc(fpr, tpr)
+    #     cut_metric.append([name[i],epoch,test_acc.item(),test_acc2.item(), test_recall.item(), test_precision.item(), test_f1score.item(), test_spec.item(), auc_score, brier])
 
 
 
-spec_vgg = pd.DataFrame(spec_metric, columns = ['name','loop','acc macro','acc micro', 'recall', 'precision', 'f1score','spec', 'auc','brier'])
-cut_vgg = pd.DataFrame(cut_metric, columns = ['name','loop','acc macro','acc micro', 'recall', 'precision', 'f1score','spec', 'auc','brier'])
+spec_vgg = pd.DataFrame(spec_metric, columns = ['name','loop','acc micro', 'recall', 'precision', 'f1score','MCC','spec', 'auc','brier'])
+recall_vgg = pd.DataFrame(recall_metric, columns = ['name','loop','acc micro', 'recall', 'precision', 'f1score','MCC','spec', 'auc','brier'])
 spec_vgg.to_excel('spec_vgg.xlsx')
-cut_vgg.to_excel('cut_vgg.xlsx')
+recall_vgg.to_excel('recall_vgg.xlsx')
+
